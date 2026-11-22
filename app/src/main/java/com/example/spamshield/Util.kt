@@ -15,7 +15,8 @@ import java.util.Calendar
 import java.util.concurrent.TimeUnit
 
 data class Msg(val id: Long, val addr: String, val body: String, val date: Long, val type: Int, val read: Boolean)
-data class Thread(val addr: String, val msgs: List<Msg>, val allowed: Boolean) {
+data class Thread(val addr: String, val msgs: List<Msg>, val allowed: Boolean, val name: String? = null) {
+    val title get() = name ?: addr
     val last get() = msgs.first()
     val unread get() = msgs.count { it.type == 1 && !it.read }
 }
@@ -41,17 +42,17 @@ object Util {
     }
 
     // ---------- تشخیص مجاز بودن ----------
-    private fun isContact(c: Context, a: String): Boolean {
-        if (a.any { it.isLetter() }) return false
-        if (c.checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) return false
+    fun contactName(c: Context, a: String): String? {
+        if (a.any { it.isLetter() }) return null
+        if (c.checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) return null
         return try {
             c.contentResolver.query(
                 Uri.withAppendedPath(PhoneLookup.CONTENT_FILTER_URI, Uri.encode(a)),
-                arrayOf(PhoneLookup._ID), null, null, null
-            )?.use { it.count > 0 } ?: false
-        } catch (e: Exception) { false }
+                arrayOf(PhoneLookup.DISPLAY_NAME), null, null, null
+            )?.use { if (it.moveToFirst()) it.getString(0) else null }
+        } catch (e: Exception) { null }
     }
-    fun allowed(c: Context, a: String, wl: Set<String> = whitelist(c)) = key(a) in wl || isContact(c, a)
+    fun allowed(c: Context, a: String, wl: Set<String> = whitelist(c)) = key(a) in wl || contactName(c, a) != null
 
     // ---------- پیام‌ها ----------
     fun load(c: Context, selection: String? = null, args: Array<String>? = null): List<Msg> {
@@ -99,7 +100,7 @@ object Util {
     fun channel(c: Context) {
         if (Build.VERSION.SDK_INT >= 26)
             c.getSystemService(NotificationManager::class.java)
-                .createNotificationChannel(NotificationChannel(CH, "اعلان‌ها", NotificationManager.IMPORTANCE_DEFAULT))
+                .createNotificationChannel(NotificationChannel(CH, "Notifications", NotificationManager.IMPORTANCE_DEFAULT))
     }
     fun notify(c: Context, id: Int, title: String, text: String, tab: Int, addr: String? = null) {
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -108,7 +109,7 @@ object Util {
         val i = Intent(c, MainActivity::class.java).putExtra("tab", tab).putExtra("addr", addr)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         val pi = PendingIntent.getActivity(c, id, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val n = NotificationCompat.Builder(c, CH).setSmallIcon(android.R.drawable.stat_notify_chat)
+        val n = NotificationCompat.Builder(c, CH).setSmallIcon(R.drawable.ic_notif)
             .setContentTitle(title).setContentText(text).setContentIntent(pi).setAutoCancel(true).build()
         c.getSystemService(NotificationManager::class.java).notify(id, n)
     }
@@ -127,8 +128,9 @@ object Util {
 class DailyWorker(c: Context, p: WorkerParameters) : Worker(c, p) {
     override fun doWork(): Result {
         val n = Util.unseenSpamToday(applicationContext)
-        val text = if (n > 0) "امروز $n پیام برات اومده که ندیدی. برای مشاهده بزن." else "امروز هیچ پیام ندیده‌ای نداری 🎉"
-        Util.notify(applicationContext, 777, "گزارش امروز", text, 1)
+        val text = if (n > 0) "You got $n message${if (n == 1) "" else "s"} today that you haven't seen. Tap to review."
+        else "No unseen messages today 🎉"
+        Util.notify(applicationContext, 777, "Daily summary", text, 1)
         return Result.success()
     }
 }
@@ -146,7 +148,7 @@ class SmsReceiver : BroadcastReceiver() {
             })
         } catch (e: Exception) { }
         // فقط پیام مخاطب‌ها و لیست سفید اعلان می‌گیرن؛ بقیه بی‌صدا تو آرشیو می‌رن
-        if (Util.allowed(c, addr)) Util.notify(c, addr.hashCode(), addr, body, 0, addr)
+        if (Util.allowed(c, addr)) Util.notify(c, addr.hashCode(), Util.contactName(c, addr) ?: addr, body, 0, addr)
     }
 }
 
